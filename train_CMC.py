@@ -9,11 +9,8 @@ import time
 import torch
 import torch.backends.cudnn as cudnn
 import argparse
-import socket
 
-import tensorboard_logger as tb_logger
-
-from torchvision import transforms, datasets
+from torchvision import transforms
 from dataset import RGB2Lab, RGB2YCbCr
 from util import adjust_learning_rate, AverageMeter
 
@@ -75,7 +72,6 @@ def parse_option():
     # specify folder
     parser.add_argument('--data_folder', type=str, default=None, help='path to data')
     parser.add_argument('--model_path', type=str, default=None, help='path to save model')
-    parser.add_argument('--tb_path', type=str, default=None, help='path to tensorboard')
 
     # add new views
     parser.add_argument('--view', type=str, default='Lab', choices=['Lab', 'YCbCr'])
@@ -89,8 +85,8 @@ def parse_option():
 
     opt = parser.parse_args()
 
-    if (opt.data_folder is None) or (opt.model_path is None) or (opt.tb_path is None):
-        raise ValueError('one or more of the folders is None: data_folder | model_path | tb_path')
+    if (opt.data_folder is None) or (opt.model_path is None):
+        raise ValueError('one or more of the folders is None: data_folder | model_path')
 
     if opt.dataset == 'imagenet':
         if 'alexnet' not in opt.model:
@@ -114,20 +110,10 @@ def parse_option():
     if not os.path.isdir(opt.model_folder):
         os.makedirs(opt.model_folder)
 
-    opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
-    if not os.path.isdir(opt.tb_folder):
-        os.makedirs(opt.tb_folder)
-
-    if not os.path.isdir(opt.data_folder):
-        raise ValueError('data path not exist: {}'.format(opt.data_folder))
-
     return opt
 
 
 def get_train_loader(args):
-    """get the train loader"""
-    data_folder = os.path.join(args.data_folder, 'train')
-
     if args.view == 'Lab':
         mean = [(0 + 100) / 2, (-86.183 + 98.233) / 2, (-107.857 + 94.478) / 2]
         std = [(100 - 0) / 2, (86.183 + 98.233) / 2, (107.857 + 94.478) / 2]
@@ -137,17 +123,25 @@ def get_train_loader(args):
         std = [109.500, 111.855, 111.964]
         color_transfer = RGB2YCbCr()
     else:
-        raise NotImplemented('view not implemented {}'.format(args.view))
+        raise NotImplementedError('view not implemented {}'.format(args.view))
     normalize = transforms.Normalize(mean=mean, std=std)
 
+    from qd.qd_pytorch import BGR2RGB
     train_transform = transforms.Compose([
+        BGR2RGB(),
+        transforms.ToPILImage(),
         transforms.RandomResizedCrop(224, scale=(args.crop_low, 1.)),
         transforms.RandomHorizontalFlip(),
         color_transfer,
         transforms.ToTensor(),
         normalize,
     ])
-    train_dataset = ImageFolderInstance(data_folder, transform=train_transform)
+    #train_dataset = ImageFolderInstance(data_folder, transform=train_transform)
+    from dataset import TSVMultiviewDataset
+    train_dataset = TSVMultiviewDataset(args.data_folder,
+            split='train',
+            version=0,
+            transform=train_transform)
     train_sampler = None
 
     # train loader
@@ -305,9 +299,6 @@ def main():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    # tensorboard
-    logger = tb_logger.Logger(logdir=args.tb_folder, flush_secs=2)
-
     # routine
     for epoch in range(args.start_epoch, args.epochs + 1):
 
@@ -319,12 +310,6 @@ def main():
                                                  optimizer, args)
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
-
-        # tensorboard logger
-        logger.log_value('l_loss', l_loss, epoch)
-        logger.log_value('l_prob', l_prob, epoch)
-        logger.log_value('ab_loss', ab_loss, epoch)
-        logger.log_value('ab_prob', ab_prob, epoch)
 
         # save model
         if epoch % args.save_freq == 0:

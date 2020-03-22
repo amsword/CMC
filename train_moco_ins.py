@@ -15,9 +15,7 @@ import torch.backends.cudnn as cudnn
 import argparse
 import socket
 
-import tensorboard_logger as tb_logger
-
-from torchvision import transforms, datasets
+from torchvision import transforms
 from util import adjust_learning_rate, AverageMeter
 
 from models.resnet import InsResNet50
@@ -94,14 +92,15 @@ def parse_option():
     parser.add_argument('--gpu', default=None, type=int, help='GPU id to use.')
 
     opt = parser.parse_args()
+    opt.data_folder = 'imagenet2012'
+    opt.model_path = 'output'
 
-    # set the path according to the environment
-    if hostname.startswith('visiongpu'):
-        opt.data_folder = '/dev/shm/yonglong/{}'.format(opt.dataset)
-        opt.model_path = '/data/vision/phillipi/rep-learn/Pedesis/CMC/{}_models'.format(opt.dataset)
-        opt.tb_path = '/data/vision/phillipi/rep-learn/Pedesis/CMC/{}_tensorboard'.format(opt.dataset)
-    else:
-        raise NotImplementedError('server invalid: {}'.format(hostname))
+    ## set the path according to the environment
+    #if hostname.startswith('visiongpu'):
+        ##opt.data_folder = '/dev/shm/yonglong/{}'.format(opt.dataset)
+        #opt.model_path = '/data/vision/phillipi/rep-learn/Pedesis/CMC/{}_models'.format(opt.dataset)
+    #else:
+        #raise NotImplementedError('server invalid: {}'.format(hostname))
 
     if opt.dataset == 'imagenet':
         if 'alexnet' not in opt.model:
@@ -130,10 +129,6 @@ def parse_option():
     if not os.path.isdir(opt.model_folder):
         os.makedirs(opt.model_folder)
 
-    opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
-    if not os.path.isdir(opt.tb_folder):
-        os.makedirs(opt.tb_folder)
-
     return opt
 
 
@@ -159,16 +154,16 @@ def main():
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
 
-    # set the data loader
-    data_folder = os.path.join(args.data_folder, 'train')
-
     image_size = 224
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
     normalize = transforms.Normalize(mean=mean, std=std)
 
+    from qd.qd_pytorch import BGR2RGB
     if args.aug == 'NULL':
         train_transform = transforms.Compose([
+            BGR2RGB(),
+            transforms.ToPILImage(),
             transforms.RandomResizedCrop(image_size, scale=(args.crop, 1.)),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
@@ -176,6 +171,8 @@ def main():
         ])
     elif args.aug == 'CJ':
         train_transform = transforms.Compose([
+            BGR2RGB(),
+            transforms.ToPILImage(),
             transforms.RandomResizedCrop(image_size, scale=(args.crop, 1.)),
             transforms.RandomGrayscale(p=0.2),
             transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
@@ -184,9 +181,14 @@ def main():
             normalize,
         ])
     else:
-        raise NotImplemented('augmentation not supported: {}'.format(args.aug))
+        raise NotImplementedError('augmentation not supported: {}'.format(args.aug))
 
-    train_dataset = ImageFolderInstance(data_folder, transform=train_transform, two_crop=args.moco)
+    from dataset import TSVMultiviewDataset
+    train_dataset = TSVMultiviewDataset(args.data_folder,
+            split='train',
+            version=0,
+            transform=train_transform,
+            two_crop=args.moco)
     print(len(train_dataset))
     train_sampler = None
     train_loader = torch.utils.data.DataLoader(
@@ -269,9 +271,6 @@ def main():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    # tensorboard
-    logger = tb_logger.Logger(logdir=args.tb_folder, flush_secs=2)
-
     # routine
     for epoch in range(args.start_epoch, args.epochs + 1):
 
@@ -285,11 +284,6 @@ def main():
             loss, prob = train_ins(epoch, train_loader, model, contrast, criterion, optimizer, args)
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
-
-        # tensorboard logger
-        logger.log_value('ins_loss', loss, epoch)
-        logger.log_value('ins_prob', prob, epoch)
-        logger.log_value('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
         # save model
         if epoch % args.save_freq == 0:

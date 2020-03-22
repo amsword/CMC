@@ -6,6 +6,38 @@ from skimage import color
 import torch
 import torchvision.datasets as datasets
 
+from qd.qd_pytorch import TSVSplitImage
+
+class TSVMultiviewDataset(TSVSplitImage):
+    """Folder datasets which returns the index of the image as well
+    """
+
+    def __init__(self, data, split, version, transform=None, target_transform=None, two_crop=False):
+        super().__init__(data, split, version, transform=None,
+            cache_policy=None, labelmap=None)
+
+        self.two_crop = two_crop
+        self.target_transform = target_transform
+        self.image_transform = transform
+
+    def __getitem__(self, index):
+        """
+        Args:
+            index (int): Index
+        Returns:
+            tuple: (image, target, index) where target is class_index of the target class.
+        """
+        image, target, key = super().__getitem__(index)
+        if self.image_transform is not None:
+            img = self.image_transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        if self.two_crop:
+            img2 = self.image_transform(image)
+            img = torch.cat([img, img2], dim=0)
+
+        return img, target, index
 
 class ImageFolderInstance(datasets.ImageFolder):
     """Folder datasets which returns the index of the image as well
